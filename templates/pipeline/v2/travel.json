@@ -1,0 +1,31 @@
+{
+  "category": "travel",
+  "dataDriven": true,
+  "sampleSize": 49,
+  "titlePatterns": [
+    "{핵심키워드} {카테고리} 후기",
+    "{장소/메뉴/대상} 솔직 {카테고리}",
+    "{카테고리} 기록 | {한줄요약}"
+  ],
+  "outline": [
+    "도입(문단 1개, 평균 21자)",
+    "본론(94~127 문단)",
+    "이미지별 상세(이미지 1개당 문단 1개)",
+    "마무리(평균 33자)"
+  ],
+  "styleRules": {
+    "tone": "구어체",
+    "targetParagraphLen": 21,
+    "paragraphLenRange": [
+      16,
+      26
+    ],
+    "targetParagraphCount": 94,
+    "introLenTarget": 21,
+    "endingLenTarget": 33,
+    "useBullets": false,
+    "useHashtagLine": false,
+    "imageCaptionMode": "per-image"
+  },
+  "hashtags": []
+}

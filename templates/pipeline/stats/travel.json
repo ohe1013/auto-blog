@@ -1,0 +1,33 @@
+{
+  "category": "travel",
+  "sampleSize": 49,
+  "paragraphCount": {
+    "avg": 85.73,
+    "median": 94,
+    "p25": 37,
+    "p75": 127
+  },
+  "paragraphLength": {
+    "avg": 26.73,
+    "median": 21,
+    "p25": 16,
+    "p75": 26
+  },
+  "titleLength": {
+    "avg": 33.86,
+    "median": 35
+  },
+  "introLength": {
+    "avg": 21.49,
+    "median": 19
+  },
+  "endingLength": {
+    "avg": 32.82,
+    "median": 20
+  },
+  "ratios": {
+    "hashtagLineRatio": 0.01,
+    "bulletLineRatio": 0.005
+  },
+  "topTags": []
+}

@@ -1,0 +1,20 @@
+{
+  "category": "sightseeing",
+  "titlePatterns": [
+    "{지역} 가볼만한곳 {장소명} 후기",
+    "{장소명} 구경 후기 | {핵심요약}"
+  ],
+  "outline": [
+    "도입: 방문 목적",
+    "장소 정보(위치/운영시간)",
+    "구간별 관람 포인트(이미지 매칭)",
+    "추천 대상/비추천 대상",
+    "마무리"
+  ],
+  "styleRules": {
+    "tone": "친근한 설명형",
+    "paragraphLength": "medium",
+    "includePracticalInfo": true
+  },
+  "hashtags": ["#가볼만한곳", "#데이트코스", "#주말나들이"]
+}

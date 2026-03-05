@@ -1,0 +1,21 @@
+{
+  "category": "mukbang",
+  "titlePatterns": [
+    "{지역} {식당명} 솔직후기",
+    "{메뉴명} 먹어본 후기 | {한줄평}"
+  ],
+  "outline": [
+    "도입: 방문 계기 + 기대 포인트",
+    "매장 분위기/웨이팅/주차",
+    "메뉴별 맛 평가(이미지 매칭)",
+    "가격/가성비/재방문 의사",
+    "총평"
+  ],
+  "styleRules": {
+    "tone": "구어체",
+    "paragraphLength": "short",
+    "useTasteAdjectives": true,
+    "useScores": true
+  },
+  "hashtags": ["#맛집", "#먹방", "#솔직후기", "#가성비"]
+}

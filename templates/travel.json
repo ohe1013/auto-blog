@@ -1,0 +1,21 @@
+{
+  "category": "travel",
+  "titlePatterns": [
+    "{지역} 여행 {n}박{m}일 코스 정리",
+    "{지역} 여행 후기 | {핵심포인트}"
+  ],
+  "outline": [
+    "도입: 왜 갔는지 + 한 줄 총평",
+    "동선/일정 요약",
+    "이미지별 상세 후기(장소/음식/팁)",
+    "비용/시간/주의사항",
+    "마무리 + 재방문 의사"
+  ],
+  "styleRules": {
+    "tone": "구어체",
+    "paragraphLength": "short",
+    "useBulletsForTips": true,
+    "cta": "도움되면 공감/댓글"
+  },
+  "hashtags": ["#여행", "#여행후기", "#국내여행", "#해외여행"]
+}

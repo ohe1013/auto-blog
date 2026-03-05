@@ -1,0 +1,33 @@
+{
+  "category": "mukbang",
+  "sampleSize": 50,
+  "paragraphCount": {
+    "avg": 67.46,
+    "median": 54.0,
+    "p25": 40,
+    "p75": 91
+  },
+  "paragraphLength": {
+    "avg": 29.95,
+    "median": 21,
+    "p25": 15,
+    "p75": 30
+  },
+  "titleLength": {
+    "avg": 35.58,
+    "median": 35.0
+  },
+  "introLength": {
+    "avg": 46.82,
+    "median": 22.0
+  },
+  "endingLength": {
+    "avg": 42.2,
+    "median": 21.0
+  },
+  "ratios": {
+    "hashtagLineRatio": 0.004,
+    "bulletLineRatio": 0.001
+  },
+  "topTags": []
+}

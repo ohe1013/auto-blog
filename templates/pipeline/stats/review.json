@@ -1,0 +1,33 @@
+{
+  "category": "review",
+  "sampleSize": 48,
+  "paragraphCount": {
+    "avg": 50.23,
+    "median": 36.5,
+    "p25": 30,
+    "p75": 53
+  },
+  "paragraphLength": {
+    "avg": 33.06,
+    "median": 24,
+    "p25": 17,
+    "p75": 38
+  },
+  "titleLength": {
+    "avg": 33.35,
+    "median": 31.0
+  },
+  "introLength": {
+    "avg": 25.96,
+    "median": 22.0
+  },
+  "endingLength": {
+    "avg": 29.52,
+    "median": 24.5
+  },
+  "ratios": {
+    "hashtagLineRatio": 0.013,
+    "bulletLineRatio": 0.007
+  },
+  "topTags": []
+}

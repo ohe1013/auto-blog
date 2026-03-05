@@ -1,0 +1,21 @@
+{
+  "category": "cooking",
+  "titlePatterns": [
+    "{요리명} 만들기 | {핵심포인트}",
+    "초간단 {요리명} 레시피 후기"
+  ],
+  "outline": [
+    "도입: 오늘 만든 요리와 이유",
+    "재료/준비 단계",
+    "조리 단계(이미지 매칭)",
+    "맛/식감/실패 포인트",
+    "마무리 + 다음 개선점"
+  ],
+  "styleRules": {
+    "tone": "친근한 레시피형",
+    "paragraphLength": "short",
+    "stepByStep": true,
+    "includeFailTips": true
+  },
+  "hashtags": ["#요리", "#집밥", "#레시피", "#요리후기"]
+}

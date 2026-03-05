@@ -1,0 +1,33 @@
+{
+  "category": "cooking",
+  "sampleSize": 50,
+  "paragraphCount": {
+    "avg": 33.16,
+    "median": 25.5,
+    "p25": 14,
+    "p75": 41
+  },
+  "paragraphLength": {
+    "avg": 28.34,
+    "median": 20.0,
+    "p25": 14,
+    "p75": 33
+  },
+  "titleLength": {
+    "avg": 35.22,
+    "median": 30.5
+  },
+  "introLength": {
+    "avg": 36.54,
+    "median": 18.0
+  },
+  "endingLength": {
+    "avg": 40.7,
+    "median": 22.0
+  },
+  "ratios": {
+    "hashtagLineRatio": 0.007,
+    "bulletLineRatio": 0.002
+  },
+  "topTags": []
+}

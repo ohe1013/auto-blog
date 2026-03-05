@@ -1,0 +1,20 @@
+{
+  "category": "review",
+  "titlePatterns": [
+    "{대상명} 솔직 후기 | {한줄평}",
+    "{대상명} 사용/방문 후기 정리"
+  ],
+  "outline": [
+    "도입: 선택 이유 + 기대 포인트",
+    "핵심 경험 요약(장점/아쉬움)",
+    "이미지별 상세 후기(상황/느낌/근거)",
+    "총평 + 추천 대상"
+  ],
+  "styleRules": {
+    "tone": "구어체",
+    "paragraphLength": "short",
+    "prosConsStructure": true,
+    "includeConclusionScore": true
+  },
+  "hashtags": ["#후기", "#솔직후기", "#사용후기", "#방문후기"]
+}
