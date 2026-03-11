@@ -12,6 +12,38 @@ function safe(v) {
   return (v ?? "").toString().trim();
 }
 
+function themeGuide(postType) {
+  const p = safe(postType);
+  if (p.includes("여행")) {
+    return {
+      intro: "여행의 배경, 이동 동선, 기대감을 자연스럽게 깔아준다.",
+      outro: "하루 총평과 다음 방문 계획을 담아 여운 있게 마무리한다.",
+    };
+  }
+  if (p.includes("먹")) {
+    return {
+      intro: "방문 계기와 첫인상, 메뉴 기대감을 생생하게 잡아준다.",
+      outro: "맛/분위기/재방문 의사를 균형 있게 정리한다.",
+    };
+  }
+  if (p.includes("후기")) {
+    return {
+      intro: "사용/방문 전 기대와 문제의식을 명확히 제시한다.",
+      outro: "총평, 추천 대상, 아쉬운 점을 객관적으로 정리한다.",
+    };
+  }
+  if (p.includes("요리")) {
+    return {
+      intro: "오늘 요리를 하게 된 배경과 핵심 포인트를 짧게 소개한다.",
+      outro: "맛의 결과와 다음 개선 포인트를 담아 마무리한다.",
+    };
+  }
+  return {
+    intro: "글의 배경과 흐름을 먼저 잡아 독자가 상황을 이해하게 한다.",
+    outro: "전체 인상과 다음 행동/계획을 담아 자연스럽게 마무리한다.",
+  };
+}
+
 function composeFallback(payload) {
   const notes = (payload.imageNotes ?? [])
     .slice()
@@ -43,15 +75,18 @@ function composeFallback(payload) {
   });
 
   const title = `${safe(payload.postType) || "일상"} 기록 - 자동 초안`;
+  const guide = themeGuide(payload.postType);
   const content = [
-    `${safe(payload.postType) || "일상"} 기록을 남긴다. 이번 글은 이미지별로 핵심 내용을 정리했다.`,
+    `이번 ${safe(payload.postType) || "일상"} 기록은 ${guide.intro}`,
+    `메모와 이미지 흐름을 따라 장면별 포인트가 자연스럽게 이어지도록 정리했다.`,
     "",
     safe(payload.draft) ? "## 초안 참고\n" + safe(payload.draft) : "",
     "## 이미지별 내용",
     ...sections,
     "",
     "## 마무리",
-    "사용자 설명을 중심으로 구성하고, 분석 결과는 보조 근거로 반영했다.",
+    `전체적으로는 장면마다 인상이 달라서 한 편의 흐름으로 묶는 재미가 있었다.`,
+    `${guide.outro}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -131,16 +166,35 @@ function extractJson(text) {
   }
 }
 
+function sanitizeFinalContent(content) {
+  return String(content || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/^AI\s*활용\s*설정.*$/gim, "")
+    .replace(/^사진\s*설명.*$/gim, "")
+    .replace(/^AI\s*분석\s*:\s*.*$/gim, "")
+    .replace(/^(Architecture|Landmark|Tourist attraction|Building material|Steel|Daylighting)\s*,?.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function composeWithCodex(payload) {
+  const guide = themeGuide(payload.postType);
   const prompt = [
     "너는 한국어 네이버 블로그 글을 다듬는 에디터다.",
     "입력 JSON을 기반으로 최종 글을 생성하라.",
     "규칙:",
     "1) 캡션은 keyword만 사용해 자연스럽게 작성",
-    "2) 본문은 description 우선, imageAnalysis.summary/tags는 보조 근거로만 사용",
-    "3) 어색한 영어 라벨 직역 금지",
-    "4) 과장/확정적 단정 금지",
-    "5) 결과는 반드시 JSON만 출력",
+    "2) 본문은 transcript/memo 전체 맥락을 먼저 반영",
+    "3) 각 이미지 문단은 description 우선, imageAnalysis.summary/tags는 보조 근거로만 사용",
+    "4) 어색한 영어 라벨 직역 금지",
+    "5) 과장/확정적 단정 금지",
+    "6) 도입은 배경/기대감/동선을 담아 2~3문장으로 풍성하게 작성",
+    `6-1) 이번 타입(${safe(payload.postType) || "일상"}) 도입 가이드: ${guide.intro}`,
+    "7) 반드시 이 구조로 작성: 도입 1~2문단, '## 이미지별 내용', 이미지 개수만큼 '### 이미지 n - 파일명' 섹션, 마무리 1문단",
+    "8) 이미지 n 섹션 본문은 해당 이미지 내용만 작성(1:1 매핑)",
+    "9) 마무리는 다음 계획/재방문 포인트/소감 정리를 담아 2~3문장으로 작성",
+    `9-1) 이번 타입(${safe(payload.postType) || "일상"}) 마무리 가이드: ${guide.outro}`,
+    "10) 결과는 반드시 JSON만 출력",
     '출력 스키마: {"title":string,"content":string,"meta":{"provider":"internal-codex-bridge","stage":"final","tone":string}}',
     "입력 JSON:",
     JSON.stringify(payload),
@@ -187,7 +241,7 @@ async function composeWithCodex(payload) {
 
   return {
     title: String(parsed.title),
-    content: String(parsed.content),
+    content: sanitizeFinalContent(String(parsed.content)),
     meta: {
       provider: "internal-codex-bridge",
       stage: "final",
@@ -200,9 +254,14 @@ async function runOnce() {
   await fs.mkdir(REQ_DIR, { recursive: true });
   await fs.mkdir(RES_DIR, { recursive: true });
 
-  const files = (await fs.readdir(REQ_DIR))
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => path.join(REQ_DIR, f));
+  const targetIdArg = process.argv.find((x) => x.startsWith("--id="));
+  const targetId = (targetIdArg ? targetIdArg.slice(5) : process.env.COMPOSE_REQUEST_ID || "").trim();
+
+  const files = targetId
+    ? [path.join(REQ_DIR, `${targetId}.json`)]
+    : (await fs.readdir(REQ_DIR))
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => path.join(REQ_DIR, f));
 
   for (const file of files) {
     let req;
@@ -233,6 +292,11 @@ async function runOnce() {
       console.warn(`[compose-bridge] codex failed for ${id}, fallback used: ${String(e)}`);
       result = composeFallback(req.payload || {});
     }
+
+    result = {
+      ...result,
+      content: sanitizeFinalContent(result?.content || ""),
+    };
 
     await fs.writeFile(resPath, JSON.stringify(result, null, 2), "utf-8");
     console.log(`[compose-bridge] done: ${id} provider=${result?.meta?.provider ?? "unknown"}`);

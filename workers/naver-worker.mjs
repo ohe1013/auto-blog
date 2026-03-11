@@ -29,6 +29,8 @@ const TXT = {
   NO: "\uC544\uB2C8\uC624",
   PHOTO_ADD: "\uC0AC\uC9C4 \uCD94\uAC00",
   SAVE: "\uC800\uC7A5",
+  AI_SETTING: "AI 활용 설정",
+  PHOTO_DESC_HINT: "사진 설명을 입력하세요",
 };
 
 const STEPS = ["OPENED", "POPUP_HANDLED", "TITLE_FILLED", "IMAGES_DONE", "SAVED"];
@@ -124,11 +126,56 @@ async function clearFocusedField(page) {
   await page.keyboard.press("Backspace");
 }
 
-function prefaceFromBody(bodyText) {
-  if (!bodyText) return "";
-  const marker = "## 이미지별 상세";
-  const idx = bodyText.indexOf(marker);
-  return idx > 0 ? bodyText.slice(0, idx).trim() : bodyText.trim();
+function parseBodyForInterleave(bodyText, imageCount) {
+  const text = (bodyText || "").replace(/\r\n/g, "\n");
+  const markerCandidates = ["## 이미지별 내용", "## 이미지별 상세"];
+  let marker = "";
+  let idx = -1;
+  for (const m of markerCandidates) {
+    const found = text.indexOf(m);
+    if (found >= 0) {
+      marker = m;
+      idx = found;
+      break;
+    }
+  }
+
+  const preface = idx > 0 ? text.slice(0, idx).trim() : text.trim();
+
+  const sectionTexts = [];
+  if (idx >= 0) {
+    const sectionPart = text.slice(idx + marker.length);
+    const chunks = sectionPart
+      .split(/\n###\s*이미지\s*\d+[^\n]*/g)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    for (const c of chunks) {
+      const cleaned = c
+        .replace(/^캡션:\s*#?.*$/gim, "")
+        .replace(/^AI\s*활용\s*설정.*$/gim, "")
+        .replace(/^사진\s*설명.*$/gim, "")
+        .replace(/^AI\s*분석\s*:\s*.*$/gim, "")
+        .trim();
+      if (cleaned) sectionTexts.push(cleaned);
+    }
+  }
+
+  while (sectionTexts.length < imageCount) sectionTexts.push("");
+  return { preface, sectionTexts: sectionTexts.slice(0, imageCount) };
+}
+
+async function focusBodyInsertPoint(page, editor) {
+  const pLast = editor.locator("article p").last();
+  if (await pLast.isVisible().catch(() => false)) {
+    await pLast.click({ force: true });
+    return;
+  }
+  const bodyHint = editor.getByText(TXT.BODY_HINT).first();
+  if (await bodyHint.isVisible().catch(() => false)) {
+    await bodyHint.click({ force: true });
+    return;
+  }
+  await page.keyboard.press("ArrowDown").catch(() => {});
 }
 
 async function fillBodyAndImages(page, editor, job) {
@@ -141,10 +188,12 @@ async function fillBodyAndImages(page, editor, job) {
   }
 
   await clearFocusedField(page);
-  await typeSlow(page, prefaceFromBody(job.bodyText || ""));
-
   const imgs = (job.images || []).slice().sort((a, b) => (a.insertOrder ?? 0) - (b.insertOrder ?? 0));
-  for (const img of imgs) {
+  const { preface, sectionTexts } = parseBodyForInterleave(job.bodyText || "", imgs.length);
+  await typeSlow(page, preface);
+
+  for (let i = 0; i < imgs.length; i++) {
+    const img = imgs[i];
     await dismissBlockingPopup(page, editor);
     const photoBtn = editor.getByRole("button", { name: TXT.PHOTO_ADD }).first();
     await photoBtn.click({ force: true });
@@ -153,24 +202,27 @@ async function fillBodyAndImages(page, editor, job) {
     await page.waitForTimeout(900);
 
     const keywordLine = (img.keyword || "").trim();
-    const desc = (img.description || "").trim();
-    const summary = (img.analysisSummary || "").trim();
+    const sectionText = (sectionTexts[i] || "").trim();
 
-    // insert text right after image: caption(keyword) then descriptive paragraph
+    // Prefer writing keyword into image description UI instead of body text title line.
     if (keywordLine) {
-      await page.keyboard.press("Enter");
-      await typeSlow(page, `#${keywordLine.replace(/^#/, "")}`);
+      const descInput = editor.getByPlaceholder(TXT.PHOTO_DESC_HINT).first();
+      if (await descInput.isVisible().catch(() => false)) {
+        await descInput.fill(keywordLine).catch(() => {});
+      }
     }
 
-    const para = [desc, summary ? `AI 분석: ${summary}` : ""].filter(Boolean).join(" ").trim();
-    if (para) {
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("Enter");
-      await typeSlow(page, para);
-    }
+    // move focus out of image-caption UI and into normal body paragraph.
+    await page.keyboard.press("Escape").catch(() => {});
+    await focusBodyInsertPoint(page, editor);
 
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Enter");
+    const block = sectionText.trim();
+    if (block) {
+      await page.keyboard.press("Enter");
+      await typeSlow(page, block);
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+    }
   }
 }
 

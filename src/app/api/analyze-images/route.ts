@@ -123,6 +123,7 @@ export async function POST(req: NextRequest) {
           index: idx,
           name: f.name,
           tags,
+          rawTags: tags,
           summary: `${f.name} 이미지에서 ${tags.slice(0, 2).join(", ")} 맥락이 추정됩니다.`,
           keyword: note?.keyword || "",
           description: note?.description || "",

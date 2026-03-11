@@ -1,14 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 type Payload = {
   postType: string;
   tone?: string;
+  memo?: string;
+  transcript?: string;
   draft?: string;
   imageNotes?: { name: string; keyword?: string; description?: string; order?: number }[];
   imageAnalysis?: { name: string; summary?: string; tags?: string[] }[];
 };
+
+function triggerComposeWorker(requestId: string) {
+  const child =
+    process.platform === "win32"
+      ? spawn("cmd.exe", ["/d", "/s", "/c", "pnpm", "worker:compose", "--id=" + requestId], {
+          cwd: process.cwd(),
+          windowsHide: true,
+          stdio: "ignore",
+          detached: true,
+          shell: false,
+        })
+      : spawn("pnpm", ["worker:compose", "--id=" + requestId], {
+          cwd: process.cwd(),
+          stdio: "ignore",
+          detached: true,
+          shell: false,
+        });
+  child.unref();
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,6 +65,9 @@ export async function POST(req: NextRequest) {
         ),
         "utf-8",
       );
+
+      // Fire compose worker immediately so client doesn't wait for manual worker run.
+      triggerComposeWorker(id);
 
       return NextResponse.json({
         ok: true,

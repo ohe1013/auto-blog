@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 
-type Generated = { title: string; content: string; meta?: { tone?: string; tags?: string[] } };
+type Generated = { title: string; content: string; meta?: { tone?: string; tags?: string[]; provider?: string; stage?: string } };
 type AnalysisItem = { index: number; name: string; tags: string[]; summary: string };
 type ImageItem = { file: File; keyword: string; preview: string; description: string; order: number };
 
@@ -91,14 +91,14 @@ export default function Home() {
     setStatus("샘플 음성 텍스트 적용 완료");
   };
 
-  const analyzeImages = async () => {
-    setStatus("이미지 분석 중...");
+  const getImageNotes = () =>
+    imageItems.map((x, i) => ({ name: x.file.name, keyword: x.keyword, description: x.description, order: i }));
+
+  const analyzeImages = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setStatus("이미지 분석 중...");
     const form = new FormData();
     imageItems.forEach((x) => form.append("images", x.file));
-    form.append(
-      "imageNotes",
-      JSON.stringify(imageItems.map((x, i) => ({ name: x.file.name, keyword: x.keyword, description: x.description, order: i })))
-    );
+    form.append("imageNotes", JSON.stringify(getImageNotes()));
 
     const res = await fetch("/api/analyze-images", {
       method: "POST",
@@ -106,18 +106,20 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "분석 실패");
-    setAnalysis(data.analyzed ?? []);
-    setStatus(`이미지 분석 완료 (${data.provider ?? "unknown"})`);
+
+    const analyzed = data.analyzed ?? [];
+    setAnalysis(analyzed);
+    if (!opts?.silent) setStatus(`이미지 분석 완료 (${data.provider ?? "unknown"})`);
+    return analyzed as AnalysisItem[];
   };
 
   const generateDraft = async () => {
     setStatus("초안 생성 중...");
-    const imageNotes = imageItems.map((x, i) => ({ name: x.file.name, keyword: x.keyword, description: x.description, order: i }));
 
     const res = await fetch("/api/generate-draft", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ postType, tone, memo, transcript, imageNames, imageAnalysis: analysis, imageNotes }),
+      body: JSON.stringify({ postType, tone, memo, transcript, imageNames, imageAnalysis: analysis, imageNotes: getImageNotes() }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "생성 실패");
@@ -125,53 +127,72 @@ export default function Home() {
     setStatus("초안 생성 완료");
   };
 
-  const composeFinal = async () => {
-    setStatus("최종 작성 요청 중...");
-    const imageNotes = imageItems.map((x, i) => ({ name: x.file.name, keyword: x.keyword, description: x.description, order: i }));
+  const composeFinal = async (opts?: { silent?: boolean }) => {
+    if (!generated) throw new Error("초안을 먼저 생성해줘");
+    if (!opts?.silent) setStatus("최종 작성 준비 중...");
+
+    const analyzed = await analyzeImages({ silent: true });
+    if (!opts?.silent) setStatus("최종 작성 요청 중...");
 
     const res = await fetch("/api/compose-final", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ postType, tone, draft: generated?.content || "", imageAnalysis: analysis, imageNotes }),
+      body: JSON.stringify({
+        postType,
+        tone,
+        memo,
+        transcript,
+        draft: generated.content || "",
+        imageAnalysis: analyzed,
+        imageNotes: getImageNotes(),
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "최종 작성 실패");
 
     if (data.mode === "bridge" && data.status === "pending") {
       const reqId = data.requestId as string;
-      setStatus(`최종 작성 대기중 (${reqId})`);
+      if (!opts?.silent) setStatus(`최종 작성 대기중 (${reqId})`);
 
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 1500));
         const p = await fetch(`/api/compose-result?id=${encodeURIComponent(reqId)}`);
         const pj = await p.json();
         if (p.ok && pj.status === "done" && pj.result) {
           setGenerated(pj.result);
-          setStatus("최종 작성 완료");
-          return;
+          if (!opts?.silent) setStatus("최종 작성 완료");
+          return pj.result as Generated;
         }
       }
-      setStatus("최종 작성 요청은 큐에 저장됨(결과 대기)");
-      return;
+      throw new Error("최종 작성 결과 대기시간 초과 (compose worker 자동 실행 실패 가능)");
     }
 
     setGenerated(data);
-    setStatus("최종 작성 완료");
+    if (!opts?.silent) setStatus("최종 작성 완료");
+    return data as Generated;
   };
 
   const dispatchToOpenClaw = async () => {
     if (!generated) return;
+    setStatus("최종 작성/전달 준비 중...");
+
+    const finalGenerated =
+      generated?.meta?.provider === "internal-codex-bridge"
+        ? generated
+        : await composeFinal({ silent: true });
+
     setStatus("OpenClaw 전달 중...");
-    const imageNotes = imageItems.map((x, i) => ({ name: x.file.name, keyword: x.keyword, description: x.description, order: i }));
+    const imageNotes = getImageNotes();
+    const latestAnalysis = analysis.length ? analysis : await analyzeImages({ silent: true });
 
     const res = await fetch("/api/dispatch", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ postType, tone, memo, transcript, imageNames, imageAnalysis: analysis, imageNotes, generated }),
+      body: JSON.stringify({ postType, tone, memo, transcript, imageNames, imageAnalysis: latestAnalysis, imageNotes, generated: finalGenerated }),
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.error || "전달 실패");
-    setStatus("전달 완료");
+    setStatus("전달 완료 (분석+리라이트 반영)");
   };
 
   return (
@@ -247,11 +268,9 @@ export default function Home() {
       </label>
 
       <div className="flex gap-2 flex-wrap">
-        <button onClick={analyzeImages} className="px-3 py-2 border rounded">이미지 분석</button>
         <button onClick={generateDraft} className="px-3 py-2 bg-black text-white rounded">초안 생성</button>
-        <button onClick={composeFinal} disabled={!generated} className="px-3 py-2 border rounded disabled:opacity-50">최종 작성</button>
         <button onClick={dispatchToOpenClaw} disabled={!generated} className="px-3 py-2 border rounded disabled:opacity-50">
-          OpenClaw로 전달
+          자동 작성 + OpenClaw 전달
         </button>
       </div>
 

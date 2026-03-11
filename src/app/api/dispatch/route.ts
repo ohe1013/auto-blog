@@ -47,6 +47,17 @@ export async function POST(req: NextRequest) {
 
     const prepare = await runPrepareScript(handoffPath);
 
+    const provider = body?.generated?.meta?.provider;
+    if (provider !== "internal-codex-bridge") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "COMPOSE_REQUIRED: 최종 리라이트 결과(provider=internal-codex-bridge) 후에만 전달할 수 있습니다.",
+        },
+        { status: 400 },
+      );
+    }
+
     // Orchestration queue for Playwright worker
     const job = toNaverJob(body);
     const jobsDir = path.join(scriptsDir, "jobs");
