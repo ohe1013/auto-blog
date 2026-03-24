@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStoredImagePath, type StoredImageAsset } from "./image-store.ts";
 
 export type PublishVisibility = "public" | "neighbor" | "private";
 
 export type NaverImageItem = {
-  path: string;
+  path?: string;
+  storageKey?: string;
   alt?: string;
   insertOrder?: number;
+  groupKey?: string;
   keyword?: string;
   description?: string;
   analysisSummary?: string;
@@ -34,7 +37,7 @@ export type NaverPublishJob = {
   };
 };
 
-function resolveImagePath(name: string): string {
+function resolveLegacyImagePath(name: string): string {
   const candidates = [
     `C:/Users/HG/Desktop/${name}`,
     `C:/Users/HG/Desktop/test/${name}`,
@@ -49,7 +52,8 @@ export function toNaverJob(input: {
   postType?: string;
   generated?: { title?: string; content?: string; meta?: { tags?: string[] } };
   imageNames?: string[];
-  imageNotes?: { name: string; keyword?: string; description?: string; order?: number }[];
+  imageAssets?: StoredImageAsset[];
+  imageNotes?: { name: string; keyword?: string; description?: string; order?: number; groupKey?: string }[];
   imageAnalysis?: { name: string; summary?: string }[];
   visibility?: PublishVisibility;
   imageInsertStrategy?: "append" | "interleave";
@@ -60,17 +64,37 @@ export function toNaverJob(input: {
   const bodyText = input.generated?.content?.trim() || "";
   const tags = input.generated?.meta?.tags ?? [];
 
-  const notes = new Map((input.imageNotes ?? []).map((n) => [n.name, n]));
-  const analysis = new Map((input.imageAnalysis ?? []).map((a) => [a.name, a]));
+  const orderedNotes = (input.imageNotes ?? [])
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const notesByName = new Map(orderedNotes.map((note) => [note.name, note]));
+  const analysisByName = new Map((input.imageAnalysis ?? []).map((entry) => [entry.name, entry]));
 
-  const images = (input.imageNames ?? []).map((name, i) => ({
-    path: resolveImagePath(name),
-    alt: name,
-    insertOrder: i,
-    keyword: notes.get(name)?.keyword,
-    description: notes.get(name)?.description,
-    analysisSummary: analysis.get(name)?.summary,
-  }));
+  const images = (input.imageAssets?.length
+    ? input.imageAssets.map((asset, index) => {
+        const note = orderedNotes[index] ?? notesByName.get(asset.originalName);
+        const analysis = analysisByName.get(note?.name ?? asset.originalName);
+        return {
+          path: resolveStoredImagePath(asset.key),
+          storageKey: asset.key,
+          alt: asset.originalName,
+          insertOrder: note?.order ?? index,
+          groupKey: note?.groupKey,
+          keyword: note?.keyword,
+          description: note?.description,
+          analysisSummary: analysis?.summary,
+        } satisfies NaverImageItem;
+      })
+    : (input.imageNames ?? []).map((name, index) => ({
+        path: resolveLegacyImagePath(name),
+        alt: name,
+        insertOrder: index,
+        groupKey: notesByName.get(name)?.groupKey,
+        keyword: notesByName.get(name)?.keyword,
+        description: notesByName.get(name)?.description,
+        analysisSummary: analysisByName.get(name)?.summary,
+      } satisfies NaverImageItem)))
+    .sort((a, b) => (a.insertOrder ?? 0) - (b.insertOrder ?? 0));
 
   return {
     id,

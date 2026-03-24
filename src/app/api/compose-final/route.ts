@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import {
+  buildTemplateContext,
+  buildTemplateGuide,
+  buildTitleCandidates,
+  getCategoryStyleProfile,
+  loadTemplate,
+  loadTemplateStats,
+} from "@/lib/template";
+import { buildGroupedScenes } from "@/lib/image-grouping";
 
 type Payload = {
   postType: string;
@@ -9,8 +18,9 @@ type Payload = {
   memo?: string;
   transcript?: string;
   draft?: string;
-  imageNotes?: { name: string; keyword?: string; description?: string; order?: number }[];
+  imageNotes?: { name: string; keyword?: string; description?: string; order?: number; groupKey?: string }[];
   imageAnalysis?: { name: string; summary?: string; tags?: string[] }[];
+  imageAssets?: { key: string; originalName: string; mimeType?: string; size?: number; createdAt?: string }[];
 };
 
 function triggerComposeWorker(requestId: string) {
@@ -35,6 +45,27 @@ function triggerComposeWorker(requestId: string) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Payload;
+    const template = loadTemplate(body.postType);
+    const stats = loadTemplateStats(body.postType);
+    const styleProfile = getCategoryStyleProfile(body.postType);
+    const templateContext = buildTemplateContext({
+      postType: body.postType,
+      memo: body.memo,
+      transcript: body.transcript,
+      imageNotes: body.imageNotes,
+      imageAnalysis: body.imageAnalysis,
+    });
+    const templateGuide = buildTemplateGuide(template, body.postType, stats);
+    const titleCandidates = buildTitleCandidates(
+      template,
+      templateContext,
+      `${body.postType || "일상"} 기록 - 최종본`,
+    );
+    const groupedScenes = buildGroupedScenes({
+      imageNotes: body.imageNotes,
+      imageAnalysis: body.imageAnalysis,
+      imageNames: body.imageAssets?.map((asset) => asset.originalName),
+    });
 
     // internal-codex bridge mode (default)
     const useBridge = (process.env.COMPOSE_BRIDGE_MODE ?? "1") === "1";
@@ -53,7 +84,14 @@ export async function POST(req: NextRequest) {
             id,
             createdAt: new Date().toISOString(),
             status: "pending",
-            payload: body,
+            payload: {
+              ...body,
+              template,
+              templateGuide,
+              titleCandidates,
+              styleProfile,
+              groupedScenes,
+            },
             policy: {
               caption: "keyword-only",
               prose: "description-first-with-analysis-support",

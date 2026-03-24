@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "node:fs";
-import path from "node:path";
+import {
+  buildTemplateContext,
+  buildTemplateGuide,
+  buildTitleCandidates,
+  getCategoryStyleProfile,
+  loadTemplate,
+  loadTemplateStats,
+} from "@/lib/template";
+import { buildGroupedScenes } from "@/lib/image-grouping";
 
 type Payload = {
   postType: string;
@@ -8,38 +15,9 @@ type Payload = {
   transcript?: string;
   imageNames?: string[];
   imageAnalysis?: { summary: string; tags: string[]; name: string }[];
-  imageNotes?: { name: string; keyword?: string; description?: string; order?: number }[];
+  imageNotes?: { name: string; keyword?: string; description?: string; order?: number; groupKey?: string }[];
   tone?: string;
 };
-
-type Template = {
-  category: string;
-  titlePatterns?: string[];
-  outline?: string[];
-  styleRules?: Record<string, unknown>;
-  hashtags?: string[];
-};
-
-const CATEGORY_MAP: Record<string, string> = {
-  "여행": "travel",
-  "먹방": "mukbang",
-  "후기": "review",
-  "요리": "cooking",
-};
-
-function loadTemplate(postType: string): Template | null {
-  const key = CATEGORY_MAP[postType] || "travel";
-  const v2 = path.join(process.cwd(), "templates", "pipeline", "v2", `${key}.json`);
-  const v1 = path.join(process.cwd(), "templates", `${key}.json`);
-
-  try {
-    if (fs.existsSync(v2)) return JSON.parse(fs.readFileSync(v2, "utf-8")) as Template;
-    if (fs.existsSync(v1)) return JSON.parse(fs.readFileSync(v1, "utf-8")) as Template;
-  } catch {
-    // ignore and fallback
-  }
-  return null;
-}
 
 function uniq<T>(arr: T[]) {
   return Array.from(new Set(arr));
@@ -49,72 +27,76 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Payload;
     const template = loadTemplate(body.postType);
+    const stats = loadTemplateStats(body.postType);
+    const styleProfile = getCategoryStyleProfile(body.postType);
+    const context = buildTemplateContext({
+      postType: body.postType,
+      memo: body.memo,
+      transcript: body.transcript,
+      imageNotes: body.imageNotes,
+      imageAnalysis: body.imageAnalysis,
+    });
+    const templateGuide = buildTemplateGuide(template, body.postType, stats);
 
-    const notesByName = new Map((body.imageNotes ?? []).map((n) => [n.name, n]));
-
-    const orderedNames = (body.imageNotes?.length
-      ? [...body.imageNotes].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((n) => n.name)
-      : body.imageNames ?? []);
-
-    const analysisByName = new Map((body.imageAnalysis ?? []).map((a) => [a.name, a]));
-
-    const imgSections = orderedNames.map((name, i) => {
-      const note = notesByName.get(name);
-      const analysis = analysisByName.get(name);
-      const keyword = (note?.keyword || "").trim();
-      const desc = (note?.description || "").trim();
-      const summary = analysis?.summary || "(자동 분석 요약 없음)";
-      const tags = analysis?.tags?.length ? analysis.tags.join(", ") : "없음";
-
-      const paragraph = [
-        desc || "설명 입력 없음",
-        `AI 분석: ${summary}`,
-        `분석 키워드: ${tags}`,
-      ].join(" ");
-
-      return [
-        `### 이미지 ${i + 1} - ${name}`,
-        `캡션 키워드: ${keyword || "(없음)"}`,
-        paragraph,
-      ].join("\n");
+    const groupedScenes = buildGroupedScenes({
+      imageNotes: body.imageNotes,
+      imageAnalysis: body.imageAnalysis,
+      imageNames: body.imageNames,
     });
 
-    const tagsFromImages = uniq((body.imageAnalysis ?? []).flatMap((a) => a.tags || []));
+    const tagsFromImages = uniq((body.imageAnalysis ?? []).flatMap((item) => item.tags || []));
     const tags = uniq([
       ...(template?.hashtags ?? []),
-      ...tagsFromImages.map((t) => (t.startsWith("#") ? t : `#${t}`)),
+      ...tagsFromImages.map((tag) => (tag.startsWith("#") ? tag : `#${tag}`)),
     ]).slice(0, 12);
 
-    const intro = `${body.postType || "일상"} 기록을 남긴다. 오늘 핵심 포인트만 간단히 정리한다.`;
-    const outline = template?.outline ?? ["도입", "본론", "정리"];
+    const fallbackTitle = `${body.postType || "일상"} 기록 - 자동 초안`;
+    const titleCandidates = buildTitleCandidates(template, context, fallbackTitle);
+    const selectedTitle = titleCandidates[0] || fallbackTitle;
 
     const lines = [
-      intro,
+      `${body.postType || "일상"} 기록을 ${context.핵심키워드} 중심으로 정리한다.`,
       "",
       `템플릿 기준: ${template?.category ?? "default"}`,
-      `톤: ${body.tone || "구어체"}`,
+      `톤: ${body.tone || template?.styleRules?.tone || "구어체"}`,
+      `제목 후보: ${titleCandidates.join(" | ")}`,
       "",
-      "## 개요",
-      ...outline.map((o) => `- ${o}`),
+      "## 템플릿 가이드",
+      ...templateGuide.map((item) => `- ${item}`),
+      "\n## 네이버 블로그 작성 포인트",
+      `- 제목 키워드: ${styleProfile.titleKeywords.join(", ")}`,
+      `- 도입: ${styleProfile.introFocus}`,
+      ...styleProfile.bodyFocus.map((item) => `- 본문: ${item}`),
+      `- 마무리: ${styleProfile.endingFocus}`,
+      `- 추천 표현: ${styleProfile.preferredExpressions.join(", ")}`,
       body.memo ? `\n## 메모\n${body.memo}` : "",
       body.transcript ? `\n## 음성 메모 정리\n${body.transcript}` : "",
-      imgSections.length ? "\n## 이미지별 상세 (1:1 매칭)" : "",
-      ...imgSections,
+      "\n## 장면별 내용",
+      ...groupedScenes.map((scene, index) => [
+        `### 장면 ${index + 1} - ${scene.label}`,
+        `${scene.groupKey ? `${scene.groupKey} 묶음으로 업로드한 이미지들` : `${scene.imageNames.length}장의 이미지를`} 한 흐름으로 정리한다.`,
+        `대표 키워드는 ${scene.keywords.join(", ") || context.핵심키워드}이고, ${scene.descriptions.join(" / ") || "현장 설명을 중심으로"} 내용을 풀어간다.`,
+        scene.summaries.length
+          ? `보조적으로는 ${scene.summaries.join(" / ")} 같은 분석 결과를 참고한다.`
+          : "",
+      ].filter(Boolean).join("\n")),
       "\n## 마무리",
-      "- 이미지별 설명과 분석 내용을 1:1로 배치",
-      "- 각 문단은 읽기 쉬운 짧은 구어체 중심",
-      "- 다음 액션/회고를 짧게 첨부",
+      `- ${context.핵심포인트} 중심으로 총평 정리`,
+      "- 같은 groupKey 사진은 한 장면으로 묶어 반복 설명을 줄이기",
+      "- 다음 행동/재방문/재사용 의사를 짧게 첨부",
       "",
       tags.join(" "),
     ].filter(Boolean);
 
     return NextResponse.json({
-      title: `${body.postType || "일상"} 기록 - 자동 초안`,
+      title: selectedTitle,
       content: lines.join("\n"),
       meta: {
         tone: body.tone || "구어체",
         tags,
         template: template?.category ?? "default",
+        titleCandidates,
+        styleProfile,
       },
     });
   } catch (e) {

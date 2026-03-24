@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  persistImageUploads,
+  readStoredImageBuffer,
+  storedImageExists,
+  type StoredImageAsset,
+} from "@/lib/image-store";
 
 function inferTags(name: string) {
   const n = name.toLowerCase();
@@ -12,7 +18,8 @@ function inferTags(name: string) {
   return Array.from(new Set(tags));
 }
 
-type Note = { name: string; keyword?: string; description?: string; order?: number };
+type Note = { name: string; keyword?: string; description?: string; order?: number; groupKey?: string };
+type ImageSource = { name: string; readBuffer: () => Promise<Buffer> };
 
 const KO_LABEL_MAP: Record<string, string> = {
   Food: "음식",
@@ -36,22 +43,39 @@ const KO_LABEL_MAP: Record<string, string> = {
   Person: "인물",
 };
 
-function toKoreanLabel(label: string): string {
+function toKoreanLabel(label: string) {
   return KO_LABEL_MAP[label] || label;
 }
 
-async function analyzeWithGoogleVision(files: File[], notesByName: Map<string, Note>) {
+function parseStoredImages(raw: FormDataEntryValue | null) {
+  if (!raw) return [] as StoredImageAsset[];
+
+  const parsed = JSON.parse(String(raw));
+  if (!Array.isArray(parsed)) {
+    throw new Error("storedImages must be an array");
+  }
+
+  return parsed.map((item) => ({
+    key: String(item?.key || ""),
+    originalName: String(item?.originalName || ""),
+    mimeType: String(item?.mimeType || "application/octet-stream"),
+    size: Number(item?.size || 0),
+    createdAt: String(item?.createdAt || ""),
+  })) satisfies StoredImageAsset[];
+}
+
+async function analyzeWithGoogleVision(sources: ImageSource[], notesByName: Map<string, Note>) {
   const key = process.env.GOOGLE_VISION_API_KEY;
   if (!key) return null;
 
   const requests = await Promise.all(
-    files.map(async (f) => {
-      const buf = Buffer.from(await f.arrayBuffer());
+    sources.map(async (source) => {
+      const buffer = await source.readBuffer();
       return {
-        image: { content: buf.toString("base64") },
+        image: { content: buffer.toString("base64") },
         features: [{ type: "LABEL_DETECTION", maxResults: 8 }],
       };
-    })
+    }),
   );
 
   const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${key}`, {
@@ -69,22 +93,22 @@ async function analyzeWithGoogleVision(files: File[], notesByName: Map<string, N
     responses?: { labelAnnotations?: { description?: string; score?: number }[] }[];
   };
 
-  const analyzed = files.map((f, idx) => {
+  return sources.map((source, idx) => {
     const labels = data.responses?.[idx]?.labelAnnotations ?? [];
     const tags = labels.map((x) => x.description).filter(Boolean).slice(0, 8) as string[];
     const koTags = tags.map(toKoreanLabel);
-    const note = notesByName.get(f.name);
+    const note = notesByName.get(source.name);
 
     const summaryCore = koTags.length
       ? `${koTags.slice(0, 3).join(", ")} 중심 장면으로 보입니다.`
-      : `라벨을 찾지 못했습니다.`;
+      : "라벨을 찾지 못했습니다.";
     const summary = note?.description
-      ? `${f.name} 이미지 분석 결과: ${summaryCore} 사용자 설명("${note.description}")을 함께 반영했습니다.`
-      : `${f.name} 이미지 분석 결과: ${summaryCore}`;
+      ? `${source.name} 이미지 분석 결과: ${summaryCore} 사용자 설명("${note.description}")을 함께 반영했습니다.`
+      : `${source.name} 이미지 분석 결과: ${summaryCore}`;
 
     return {
       index: idx,
-      name: f.name,
+      name: source.name,
       tags: koTags,
       rawTags: tags,
       summary,
@@ -92,8 +116,6 @@ async function analyzeWithGoogleVision(files: File[], notesByName: Map<string, N
       description: note?.description || "",
     };
   });
-
-  return analyzed;
 }
 
 export async function POST(req: NextRequest) {
@@ -101,39 +123,68 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const files = form
       .getAll("images")
-      .filter((x): x is File => x instanceof File);
+      .filter((entry): entry is File => entry instanceof File);
 
     const notesRaw = String(form.get("imageNotes") || "[]");
     const notes = JSON.parse(notesRaw) as Note[];
-    const notesByName = new Map(notes.map((n) => [n.name, n]));
+    const notesByName = new Map(notes.map((note) => [note.name, note]));
+    const incomingStoredImages = parseStoredImages(form.get("storedImages"));
 
-    if (!files.length) {
-      return NextResponse.json({ error: "images are required" }, { status: 400 });
+    let storedImages: StoredImageAsset[] = [];
+    let sources: ImageSource[] = [];
+
+    if (files.length) {
+      storedImages = await persistImageUploads(files);
+      sources = files.map((file) => ({
+        name: file.name,
+        readBuffer: async () => Buffer.from(await file.arrayBuffer()),
+      }));
+    } else if (incomingStoredImages.length) {
+      const missing = incomingStoredImages.find((asset) => !asset.key || !storedImageExists(asset.key));
+      if (missing) {
+        return NextResponse.json({ error: `stored image not found: ${missing.originalName || missing.key}` }, { status: 400 });
+      }
+
+      storedImages = incomingStoredImages;
+      sources = incomingStoredImages.map((asset) => ({
+        name: asset.originalName,
+        readBuffer: async () => await readStoredImageBuffer(asset),
+      }));
     }
 
-    let analyzed = await analyzeWithGoogleVision(files, notesByName);
+    if (!sources.length) {
+      return NextResponse.json({ error: "images or storedImages are required" }, { status: 400 });
+    }
+
+    let analyzed = await analyzeWithGoogleVision(sources, notesByName);
     let provider = "google-vision-label-ko";
 
     if (!analyzed) {
       provider = "fallback-name-heuristic";
-      analyzed = files.map((f, idx) => {
-        const tags = inferTags(f.name);
-        const note = notesByName.get(f.name);
+      analyzed = sources.map((source, idx) => {
+        const tags = inferTags(source.name);
+        const note = notesByName.get(source.name);
         return {
           index: idx,
-          name: f.name,
+          name: source.name,
           tags,
           rawTags: tags,
-          summary: `${f.name} 이미지에서 ${tags.slice(0, 2).join(", ")} 맥락이 추정됩니다.`,
+          summary: `${source.name} 이미지에서 ${tags.slice(0, 2).join(", ")} 맥락이 추정됩니다.`,
           keyword: note?.keyword || "",
           description: note?.description || "",
         };
       });
     }
 
-    const globalKeywords = Array.from(new Set(analyzed.flatMap((a) => a.tags))).slice(0, 12);
+    const globalKeywords = Array.from(new Set(analyzed.flatMap((item) => item.tags))).slice(0, 12);
 
-    return NextResponse.json({ analyzed, globalKeywords, provider });
+    return NextResponse.json({
+      analyzed,
+      globalKeywords,
+      provider,
+      storedImages,
+      storageProvider: "local-script-uploads",
+    });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

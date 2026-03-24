@@ -3,6 +3,19 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { toNaverJob } from "@/lib/job";
+import type { StoredImageAsset } from "@/lib/image-store";
+
+type DispatchBody = {
+  postType?: string;
+  tone?: string;
+  memo?: string;
+  transcript?: string;
+  imageNames?: string[];
+  imageAssets?: StoredImageAsset[];
+  imageAnalysis?: { name: string; summary?: string; tags?: string[] }[];
+  imageNotes?: { name: string; keyword?: string; description?: string; order?: number; groupKey?: string }[];
+  generated?: { title?: string; content?: string; meta?: { provider?: string; tags?: string[] } };
+};
 
 function runPrepareScript(
   handoffPath: string,
@@ -39,15 +52,9 @@ function runPrepareScript(
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await req.json() as DispatchBody;
+    const provider = body.generated?.meta?.provider;
 
-    const scriptsDir = path.join(process.cwd(), "..", "scripts");
-    const handoffPath = path.join(scriptsDir, "naver-last-job.json");
-    await fs.writeFile(handoffPath, JSON.stringify(body, null, 2), "utf-8");
-
-    const prepare = await runPrepareScript(handoffPath);
-
-    const provider = body?.generated?.meta?.provider;
     if (provider !== "internal-codex-bridge") {
       return NextResponse.json(
         {
@@ -57,6 +64,12 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+
+    const scriptsDir = path.join(process.cwd(), "..", "scripts");
+    const handoffPath = path.join(scriptsDir, "naver-last-job.json");
+    await fs.writeFile(handoffPath, JSON.stringify(body, null, 2), "utf-8");
+
+    const prepare = await runPrepareScript(handoffPath);
 
     // Orchestration queue for Playwright worker
     const job = toNaverJob(body);
@@ -78,7 +91,7 @@ export async function POST(req: NextRequest) {
         `타입: ${body.postType ?? "일상"}`,
         `톤: ${body.tone ?? "구어체"}`,
         `제목: ${body.generated?.title ?? "(없음)"}`,
-        `이미지: ${(body.imageNames ?? []).join(", ") || "없음"}`,
+        `이미지: ${(body.imageNames ?? body.imageAssets?.map((asset) => asset.originalName) ?? []).join(", ") || "없음"}`,
         `handoff: ${handoffPath}`,
         `job: ${queuedPath}`,
         prepare.ok ? "prepare: READY" : "prepare: FAILED",

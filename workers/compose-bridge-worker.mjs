@@ -45,17 +45,13 @@ function themeGuide(postType) {
 }
 
 function composeFallback(payload) {
-  const notes = (payload.imageNotes ?? [])
-    .slice()
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const analysisByName = new Map((payload.imageAnalysis ?? []).map((a) => [a.name, a]));
+  const groupedScenes = Array.isArray(payload.groupedScenes) ? payload.groupedScenes : [];
 
-  const sections = notes.map((n, idx) => {
-    const a = analysisByName.get(n.name);
-    const keyword = safe(n.keyword);
-    const desc = safe(n.description);
-    const summary = safe(a?.summary);
-    const tags = (a?.tags ?? []).slice(0, 4).join(", ");
+  const sections = groupedScenes.map((scene, idx) => {
+    const keyword = (scene.keywords ?? []).map(safe).filter(Boolean).join(", ");
+    const desc = (scene.descriptions ?? []).map(safe).filter(Boolean).join(" / ");
+    const summary = (scene.summaries ?? []).map(safe).filter(Boolean).join(" / ");
+    const tags = (scene.tags ?? []).slice(0, 4).join(", ");
 
     const paragraph = [
       desc || "현장에서 느낀 분위기와 핵심 포인트를 중심으로 정리했다.",
@@ -66,7 +62,9 @@ function composeFallback(payload) {
       .join(" ");
 
     return [
-      `### 이미지 ${idx + 1} - ${n.name}`,
+      `### 장면 ${idx + 1} - ${safe(scene.label) || `묶음 ${idx + 1}`}`,
+      scene.groupKey ? `groupKey: ${safe(scene.groupKey)}` : "",
+      Array.isArray(scene.imageNames) && scene.imageNames.length ? `포함 이미지: ${scene.imageNames.join(", ")}` : "",
       keyword ? `캡션: #${keyword.replace(/^#/, "")}` : "",
       paragraph,
     ]
@@ -74,18 +72,23 @@ function composeFallback(payload) {
       .join("\n");
   });
 
-  const title = `${safe(payload.postType) || "일상"} 기록 - 자동 초안`;
+  const title = (payload.titleCandidates && payload.titleCandidates[0]) || `${safe(payload.postType) || "일상"} 기록 - 자동 초안`;
   const guide = themeGuide(payload.postType);
+  const templateGuide = Array.isArray(payload.templateGuide) ? payload.templateGuide : [];
+  const styleProfile = payload.styleProfile || {};
   const content = [
     `이번 ${safe(payload.postType) || "일상"} 기록은 ${guide.intro}`,
     `메모와 이미지 흐름을 따라 장면별 포인트가 자연스럽게 이어지도록 정리했다.`,
+    templateGuide.length ? `템플릿 기준은 ${templateGuide.slice(0, 3).join(", ")} 정도로 반영했다.` : "",
+    styleProfile.introFocus ? `도입에서는 ${safe(styleProfile.introFocus)}` : "",
     "",
     safe(payload.draft) ? "## 초안 참고\n" + safe(payload.draft) : "",
-    "## 이미지별 내용",
+    "## 장면별 내용",
     ...sections,
     "",
     "## 마무리",
     `전체적으로는 장면마다 인상이 달라서 한 편의 흐름으로 묶는 재미가 있었다.`,
+    styleProfile.endingFocus ? safe(styleProfile.endingFocus) : "",
     `${guide.outro}`,
   ]
     .filter(Boolean)
@@ -179,6 +182,10 @@ function sanitizeFinalContent(content) {
 
 async function composeWithCodex(payload) {
   const guide = themeGuide(payload.postType);
+  const templateGuide = Array.isArray(payload.templateGuide) ? payload.templateGuide : [];
+  const titleCandidates = Array.isArray(payload.titleCandidates) ? payload.titleCandidates.filter(Boolean) : [];
+  const styleProfile = payload.styleProfile || {};
+  const groupedScenes = Array.isArray(payload.groupedScenes) ? payload.groupedScenes : [];
   const prompt = [
     "너는 한국어 네이버 블로그 글을 다듬는 에디터다.",
     "입력 JSON을 기반으로 최종 글을 생성하라.",
@@ -188,13 +195,25 @@ async function composeWithCodex(payload) {
     "3) 각 이미지 문단은 description 우선, imageAnalysis.summary/tags는 보조 근거로만 사용",
     "4) 어색한 영어 라벨 직역 금지",
     "5) 과장/확정적 단정 금지",
-    "6) 도입은 배경/기대감/동선을 담아 2~3문장으로 풍성하게 작성",
-    `6-1) 이번 타입(${safe(payload.postType) || "일상"}) 도입 가이드: ${guide.intro}`,
-    "7) 반드시 이 구조로 작성: 도입 1~2문단, '## 이미지별 내용', 이미지 개수만큼 '### 이미지 n - 파일명' 섹션, 마무리 1문단",
-    "8) 이미지 n 섹션 본문은 해당 이미지 내용만 작성(1:1 매핑)",
-    "9) 마무리는 다음 계획/재방문 포인트/소감 정리를 담아 2~3문장으로 작성",
-    `9-1) 이번 타입(${safe(payload.postType) || "일상"}) 마무리 가이드: ${guide.outro}`,
-    "10) 결과는 반드시 JSON만 출력",
+    "6) 네이버 블로그 톤으로 작성: 1~3문장 단락, 생활형 구어체, 모바일에서 읽기 쉽게",
+    "6-0) 불릿/해시태그 라인은 최소화하고 실제 후기처럼 자연스럽게 이어 쓴다",
+    "7) 도입은 배경/기대감/동선을 담아 2~3문장으로 풍성하게 작성",
+    `7-1) 이번 타입(${safe(payload.postType) || "일상"}) 도입 가이드: ${guide.intro}`,
+    "8) templateGuide가 있으면 반드시 우선 반영해 문체/구성/CTA를 맞춘다",
+    titleCandidates.length ? `8-1) 제목은 가능하면 이 후보 중 하나를 기반으로 다듬는다: ${titleCandidates.join(" | ")}` : "",
+    templateGuide.length ? `8-2) 템플릿 가이드: ${templateGuide.join(" / ")}` : "",
+    styleProfile.introFocus ? `8-3) 카테고리 도입 포인트: ${safe(styleProfile.introFocus)}` : "",
+    Array.isArray(styleProfile.bodyFocus) && styleProfile.bodyFocus.length ? `8-4) 카테고리 본문 포인트: ${styleProfile.bodyFocus.join(" / ")}` : "",
+    styleProfile.endingFocus ? `8-5) 카테고리 마무리 포인트: ${safe(styleProfile.endingFocus)}` : "",
+    Array.isArray(styleProfile.preferredExpressions) && styleProfile.preferredExpressions.length ? `8-6) 자주 쓰는 표현 예시: ${styleProfile.preferredExpressions.join(", ")}` : "",
+    Array.isArray(styleProfile.bannedPatterns) && styleProfile.bannedPatterns.length ? `8-7) 피해야 할 패턴: ${styleProfile.bannedPatterns.join(", ")}` : "",
+    "9) 반드시 이 구조로 작성: 도입 1~2문단, '## 장면별 내용', groupedScenes 개수만큼 '### 장면 n - 대표키워드' 섹션, 마무리 1문단",
+    groupedScenes.length ? `9-1) 현재 groupedScenes 수: ${groupedScenes.length}` : "",
+    "10) 같은 groupKey 이미지는 반드시 같은 장면 섹션 하나로 묶는다",
+    "10-1) 장면 섹션 안에서는 여러 이미지를 하나의 공간/경험으로 자연스럽게 설명한다",
+    "11) 마무리는 다음 계획/재방문 포인트/소감 정리를 담아 2~3문장으로 작성",
+    `11-1) 이번 타입(${safe(payload.postType) || "일상"}) 마무리 가이드: ${guide.outro}`,
+    "12) 결과는 반드시 JSON만 출력",
     '출력 스키마: {"title":string,"content":string,"meta":{"provider":"internal-codex-bridge","stage":"final","tone":string}}',
     "입력 JSON:",
     JSON.stringify(payload),

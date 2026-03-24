@@ -18,6 +18,7 @@ const JOB_DIR = path.join(SCRIPTS_DIR, "jobs");
 const CHECKPOINT_DIR = path.join(SCRIPTS_DIR, "checkpoints");
 const STORAGE_STATE_PATH = path.join(SCRIPTS_DIR, "naver-storage-state.json");
 const CRED_SCRIPT = path.join(SCRIPTS_DIR, "get-naver-credential.ps1");
+const UPLOAD_DIR = path.resolve(process.env.BLOG_MVP_IMAGE_STORAGE_DIR || path.join(ROOT, "..", "scripts", "uploads"));
 
 const TXT = {
   LOGIN: "\uB85C\uADF8\uC778",
@@ -81,6 +82,26 @@ function donePath(filePath) {
   return filePath;
 }
 
+function resolveStoredImagePath(storageKey) {
+  const normalized = String(storageKey || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("..")) {
+    throw new Error(`invalid storageKey: ${storageKey}`);
+  }
+  return path.resolve(UPLOAD_DIR, normalized);
+}
+
+function resolveUploadPath(image) {
+  if (image.storageKey) {
+    const resolved = resolveStoredImagePath(image.storageKey);
+    if (fssync.existsSync(resolved)) return resolved;
+  }
+
+  if (image.path && fssync.existsSync(image.path)) return image.path;
+  if (image.path) return image.path;
+
+  throw new Error(`upload image not found: ${image.alt || image.storageKey || "unknown"}`);
+}
+
 function loadNaverCredential() {
   const cmd = spawnSync("powershell", ["-ExecutionPolicy", "Bypass", "-File", CRED_SCRIPT], { encoding: "utf-8" });
   if (cmd.status !== 0) {
@@ -128,7 +149,7 @@ async function clearFocusedField(page) {
 
 function parseBodyForInterleave(bodyText, imageCount) {
   const text = (bodyText || "").replace(/\r\n/g, "\n");
-  const markerCandidates = ["## 이미지별 내용", "## 이미지별 상세"];
+  const markerCandidates = ["## 장면별 내용", "## 이미지별 내용", "## 이미지별 상세"];
   let marker = "";
   let idx = -1;
   for (const m of markerCandidates) {
@@ -146,11 +167,13 @@ function parseBodyForInterleave(bodyText, imageCount) {
   if (idx >= 0) {
     const sectionPart = text.slice(idx + marker.length);
     const chunks = sectionPart
-      .split(/\n###\s*이미지\s*\d+[^\n]*/g)
+      .split(/\n###\s*(?:장면|이미지|묶음)\s*\d+[^\n]*/g)
       .map((x) => x.trim())
       .filter(Boolean);
     for (const c of chunks) {
       const cleaned = c
+        .replace(/^groupKey:\s*.*$/gim, "")
+        .replace(/^포함 이미지:\s*.*$/gim, "")
         .replace(/^캡션:\s*#?.*$/gim, "")
         .replace(/^AI\s*활용\s*설정.*$/gim, "")
         .replace(/^사진\s*설명.*$/gim, "")
@@ -162,6 +185,32 @@ function parseBodyForInterleave(bodyText, imageCount) {
 
   while (sectionTexts.length < imageCount) sectionTexts.push("");
   return { preface, sectionTexts: sectionTexts.slice(0, imageCount) };
+}
+
+function getImageGroupId(image, index) {
+  const groupKey = String(image.groupKey || "").trim();
+  return groupKey || `__single__:${image.insertOrder ?? index}:${image.alt || ""}`;
+}
+
+function groupImagesForBody(images) {
+  const ordered = (images || []).slice().sort((a, b) => (a.insertOrder ?? 0) - (b.insertOrder ?? 0));
+  const groups = [];
+  const seen = new Map();
+
+  for (let index = 0; index < ordered.length; index++) {
+    const image = ordered[index];
+    const groupKey = String(image.groupKey || "").trim();
+    const groupId = getImageGroupId(image, index);
+    let group = seen.get(groupId);
+    if (!group) {
+      group = { id: groupId, groupKey: groupKey || null, images: [] };
+      seen.set(groupId, group);
+      groups.push(group);
+    }
+    group.images.push(image);
+  }
+
+  return groups;
 }
 
 async function focusBodyInsertPoint(page, editor) {
@@ -189,22 +238,29 @@ async function fillBodyAndImages(page, editor, job) {
 
   await clearFocusedField(page);
   const imgs = (job.images || []).slice().sort((a, b) => (a.insertOrder ?? 0) - (b.insertOrder ?? 0));
-  const { preface, sectionTexts } = parseBodyForInterleave(job.bodyText || "", imgs.length);
+  const imageGroups = groupImagesForBody(imgs);
+  const { preface, sectionTexts } = parseBodyForInterleave(job.bodyText || "", imageGroups.length);
+  const groupIndexById = new Map(imageGroups.map((group, index) => [group.id, index]));
+  const lastIndexById = new Map();
+  imgs.forEach((img, index) => {
+    lastIndexById.set(getImageGroupId(img, index), index);
+  });
   await typeSlow(page, preface);
 
   for (let i = 0; i < imgs.length; i++) {
     const img = imgs[i];
+    const groupId = getImageGroupId(img, i);
+    const sectionIndex = groupIndexById.get(groupId) ?? i;
+    const sectionText = (sectionTexts[sectionIndex] || "").trim();
+
     await dismissBlockingPopup(page, editor);
     const photoBtn = editor.getByRole("button", { name: TXT.PHOTO_ADD }).first();
     await photoBtn.click({ force: true });
     const fileInput = editor.locator('input[type="file"]').first();
-    await fileInput.setInputFiles(img.path);
+    await fileInput.setInputFiles(resolveUploadPath(img));
     await page.waitForTimeout(900);
 
     const keywordLine = (img.keyword || "").trim();
-    const sectionText = (sectionTexts[i] || "").trim();
-
-    // Prefer writing keyword into image description UI instead of body text title line.
     if (keywordLine) {
       const descInput = editor.getByPlaceholder(TXT.PHOTO_DESC_HINT).first();
       if (await descInput.isVisible().catch(() => false)) {
@@ -212,16 +268,17 @@ async function fillBodyAndImages(page, editor, job) {
       }
     }
 
-    // move focus out of image-caption UI and into normal body paragraph.
     await page.keyboard.press("Escape").catch(() => {});
-    await focusBodyInsertPoint(page, editor);
 
-    const block = sectionText.trim();
-    if (block) {
-      await page.keyboard.press("Enter");
-      await typeSlow(page, block);
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("Enter");
+    if (lastIndexById.get(groupId) === i) {
+      await focusBodyInsertPoint(page, editor);
+      const block = sectionText.trim();
+      if (block) {
+        await page.keyboard.press("Enter");
+        await typeSlow(page, block);
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Enter");
+      }
     }
   }
 }
